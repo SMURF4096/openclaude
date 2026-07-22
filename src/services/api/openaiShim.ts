@@ -139,6 +139,20 @@ import {
   parseCredentialList,
 } from './credentialPool.js'
 import { MIN_RECOMMENDED_OLLAMA_CONTEXT_TOKENS } from '../../utils/ollamaContext.js'
+import {
+  filterAnthropicHeaders,
+  geminiThoughtSignatureFromExtraContent,
+  hasCerebrasApiHost,
+  hasGeminiApiHost as matchesGeminiApiHost,
+  hasMistralApiHost,
+  isGithubModelsMode,
+  isGeminiModelName,
+  mergeGeminiThoughtSignature,
+  maybeSetNvidiaNimChatTemplateThinking,
+  shouldPreserveGeminiThoughtSignature as shouldPreserveGeminiThoughtSignatureForRoute,
+} from './openaiShim/providerCompatibility.js'
+
+export { hasMistralApiHost }
 
 const GITHUB_429_MAX_RETRIES = 3
 const GITHUB_429_BASE_DELAY_SEC = 1
@@ -385,150 +399,20 @@ async function fetchWithHeadersDeadline(
   )
 }
 
-function isGithubModelsMode(): boolean {
-  return isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
-}
-
-function filterAnthropicHeaders(
-  headers: Record<string, string> | undefined,
-): Record<string, string> {
-  if (!headers) return {}
-
-  const filtered: Record<string, string> = {}
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase()
-    if (
-      lower.startsWith('x-anthropic') ||
-      lower.startsWith('anthropic-') ||
-      lower.startsWith('x-claude') ||
-      lower === 'x-app' ||
-      lower === 'x-client-app' ||
-      lower === 'authorization' ||
-      lower === 'x-api-key' ||
-      lower === 'api-key'
-    ) {
-      continue
-    }
-    filtered[key] = value
-  }
-
-  return filtered
-}
-
 function hasGeminiApiHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === GEMINI_API_HOST
-  } catch {
-    return false
-  }
-}
-
-function isGeminiModelName(model: string | undefined): boolean {
-  const normalized = model?.trim().toLowerCase()
-  return (
-    normalized?.startsWith('google/gemini-') === true ||
-    normalized?.startsWith('gemini-') === true
-  )
+  return matchesGeminiApiHost(baseUrl, GEMINI_API_HOST)
 }
 
 function shouldPreserveGeminiThoughtSignature(
   model: string | undefined,
   baseUrl?: string,
 ): boolean {
-  return isGeminiMode() || hasGeminiApiHost(baseUrl) || isGeminiModelName(model)
-}
-
-function geminiThoughtSignatureFromExtraContent(
-  extraContent: unknown,
-): string | undefined {
-  if (!extraContent || typeof extraContent !== 'object') return undefined
-  const google = (extraContent as Record<string, unknown>).google
-  if (!google || typeof google !== 'object') return undefined
-  const signature = (google as Record<string, unknown>).thought_signature
-  return typeof signature === 'string' && signature.length > 0 ? signature : undefined
-}
-
-function mergeGeminiThoughtSignature(
-  extraContent: Record<string, unknown> | undefined,
-  signature: string | undefined,
-): Record<string, unknown> | undefined {
-  if (!signature) return extraContent
-  const existingGoogle =
-    extraContent?.google && typeof extraContent.google === 'object'
-      ? extraContent.google as Record<string, unknown>
-      : {}
-  return {
-    ...extraContent,
-    google: {
-      ...existingGoogle,
-      thought_signature: signature,
-    },
-  }
-}
-
-function hasCerebrasApiHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase()
-    return host === 'api.cerebras.ai' || host.endsWith('.cerebras.ai')
-  } catch {
-    return false
-  }
-}
-
-export function hasMistralApiHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase()
-    return host === 'api.mistral.ai' || host.endsWith('.mistral.ai')
-  } catch {
-    return false
-  }
-}
-
-function hasNvidiaNimApiHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === 'integrate.api.nvidia.com'
-  } catch {
-    return false
-  }
-}
-
-function setNvidiaNimChatTemplateThinking(body: Record<string, unknown>): void {
-  const existing = body.chat_template_kwargs
-  const kwargs =
-    existing && typeof existing === 'object' && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>) }
-      : {}
-
-  kwargs.thinking = true
-  kwargs.enable_thinking = true
-  body.chat_template_kwargs = kwargs
-}
-
-function maybeSetNvidiaNimChatTemplateThinking(
-  body: Record<string, unknown>,
-  baseUrl: string | undefined,
-  reasoningRequestPlan: {
-    thinkingType?: string
-    reasoningEffort?: string
-  },
-): void {
-  if (!hasNvidiaNimApiHost(baseUrl)) return
-  if (
-    reasoningRequestPlan.thinkingType !== 'enabled' &&
-    !reasoningRequestPlan.reasoningEffort
-  ) {
-    return
-  }
-
-  setNvidiaNimChatTemplateThinking(body)
+  return shouldPreserveGeminiThoughtSignatureForRoute(
+    model,
+    baseUrl,
+    isGeminiMode(),
+    GEMINI_API_HOST,
+  )
 }
 
 function formatRetryAfterHint(response: Response): string {
